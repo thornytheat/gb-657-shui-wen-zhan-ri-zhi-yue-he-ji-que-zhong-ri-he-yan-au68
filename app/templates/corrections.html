@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+{% block body %}
+<section class="page-head">
+  <div>
+    <h1 class="page-title">月量更正</h1>
+    <p class="page-meta mono">高版本日值补传 · 原始行与理由留痕 · 按站点日期裁决版本</p>
+  </div>
+  <div class="actions">
+    <a class="btn btn-ghost" href="/api/corrections/generations">版本接口</a>
+    <a class="btn btn-primary" href="/api/corrections/monthly.csv{% if selected_gen %}?gen_id={{ selected_gen }}{% endif %}">下载所选版本月报</a>
+  </div>
+</section>
+
+<div class="notice" id="notice" role="status" hidden></div>
+
+<section class="panel">
+  <div class="panel-head"><h2 class="panel-title">① 导入真实日值（补传/更正）</h2>
+    <span class="panel-sub mono">零雨写 0，缺测写 缺测/-，二者分开</span></div>
+  <form id="corr-form" class="corr-form">
+    <label class="field">更正理由（必填，随原始行留痕）
+      <input type="text" id="corr-reason" name="reason" placeholder="例：水文站 2 月 29 日补传高版本日值" required>
+    </label>
+    <label class="field">CSV 文件（station,date,rainfall_mm,version）
+      <input type="file" id="corr-file" name="file" accept=".csv,text/csv">
+    </label>
+    <label class="field">或粘贴 JSON 记录
+      <textarea id="corr-records" rows="4" placeholder='[{"station":"0012","date":"2024-02-29","rainfall_mm":"8.0","version":2}]'></textarea>
+    </label>
+    <div class="form-actions">
+      <button class="btn btn-primary" type="button" id="corr-stage">导入暂存</button>
+      <span class="panel-sub mono">基准版本：<span id="corr-base">{{ current_gen or '（首次发布，无基准）' }}</span></span>
+    </div>
+  </form>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2 class="panel-title">② 更正任务与发布</h2>
+    <span class="panel-sub mono">发布拒绝过期更正 · 中断可续跑 · 重试不重复出月报</span></div>
+  <div class="table-wrap"><table class="table table-dense">
+    <thead><tr><th>任务</th><th>来源</th><th>理由</th><th>基准版本</th><th>状态</th><th class="num">输入</th><th class="num">采纳</th><th class="num">重复</th><th class="num">隔离</th><th>操作</th></tr></thead>
+    <tbody id="corr-runs">
+    {% for r in runs %}
+      <tr data-run="{{ r.run_id }}">
+        <td class="mono">{{ r.run_id }}</td>
+        <td class="mono">{{ r.source_name }}</td>
+        <td>{{ r.reason }}</td>
+        <td class="mono">{{ r.base_gen or '—' }}</td>
+        <td><span class="badge badge-{{ 'ok' if r.status == 'done' else 'warn' }}">{{ r.status }}</span></td>
+        <td class="num mono">{{ r.input_count }}</td>
+        <td class="num mono">{{ r.accepted_count }}</td>
+        <td class="num mono">{{ r.duplicate_count }}</td>
+        <td class="num mono">{{ r.isolated_count }}</td>
+        <td class="cell-actions">
+          {% if r.status == 'staged' %}
+          <button class="btn btn-primary btn-sm corr-publish" type="button" data-run="{{ r.run_id }}">发布</button>
+          <button class="btn btn-ghost btn-sm corr-rebase" type="button" data-run="{{ r.run_id }}">重新定基</button>
+          {% elif r.status == 'done' %}<span class="panel-sub mono">已冻结</span>{% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+</section>
+
+<section class="kpis" aria-label="四账对账">
+  <div class="kpi"><span class="kpi-label">输入日值</span><span class="kpi-value mono">{{ reconcile.total_source }}</span></div>
+  <div class="kpi"><span class="kpi-label">采纳</span><span class="kpi-value mono">{{ reconcile.accepted }}</span></div>
+  <div class="kpi"><span class="kpi-label">重复版本</span><span class="kpi-value mono">{{ reconcile.duplicates }}</span></div>
+  <div class="kpi"><span class="kpi-label">隔离</span><span class="kpi-value mono">{{ reconcile.isolated }}</span></div>
+  <div class="kpi"><span class="kpi-label">差额</span><span class="kpi-value mono">{{ reconcile.delta }}</span></div>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2 class="panel-title">③ 版本选择与前后对看</h2>
+    <span class="panel-sub mono">当前版本 {{ current_gen or '—' }}</span></div>
+  <div class="version-bar">
+    {% for g in generations %}
+    <a class="chip {% if g.gen_id == selected_gen %}is-active{% endif %}"
+       href="/corrections?gen_id={{ g.gen_id }}">{{ g.gen_id }}</a>
+    {% else %}<span class="panel-sub mono">还没有已发布版本</span>{% endfor %}
+    {% if generations|length > 1 and selected_gen != current_gen %}
+    <button class="btn btn-ghost btn-sm" type="button" id="corr-switch" data-gen="{{ selected_gen }}">切到此版本</button>
+    {% endif %}
+  </div>
+  {% if compare_pair %}
+  <div class="table-wrap"><table class="table table-dense">
+    <thead><tr><th>站号</th><th>月份</th><th class="num">前版 {{ compare_pair.left_gen }}</th><th class="num">后版 {{ compare_pair.right_gen }}</th><th class="num">变化</th></tr></thead>
+    <tbody>{% for row in compare_pair.rows %}
+      <tr class="{% if row.changed %}row-changed{% endif %}">
+        <td class="mono">{{ row.station }}</td><td class="mono">{{ row.month }}</td>
+        <td class="num mono">{{ row.left or '—' }}</td>
+        <td class="num mono">{{ row.right or '—' }}</td>
+        <td class="num mono">{{ row.delta or '0.0' }}</td>
+      </tr>{% endfor %}</tbody>
+  </table></div>
+  {% endif %}
+</section>
+
+{% if view %}
+<section class="panel">
+  <div class="panel-head"><h2 class="panel-title">月量（{{ view.gen.gen_id }}）</h2>
+    <span class="panel-sub mono">理由：{{ view.gen.reason }}</span></div>
+  <div class="table-wrap"><table class="table table-dense">
+    <thead><tr><th>站号</th><th>月份</th><th class="num">月雨量 mm</th><th class="num">自然日</th><th class="num">采信日</th><th class="num">零雨</th><th class="num">缺测</th><th class="num">隔离日</th><th class="num">缺日</th><th>缺日明细</th><th>状态</th></tr></thead>
+    <tbody>{% for m in view.monthly %}
+      <tr>
+        <td class="mono">{{ m.station }}</td><td class="mono">{{ m.month }}</td>
+        <td class="num mono">{{ m.rainfall_mm }}</td>
+        <td class="num mono">{{ m.expected_days }}</td>
+        <td class="num mono">{{ m.observed_days }}</td>
+        <td class="num mono">{{ m.zero_days }}</td>
+        <td class="num mono">{{ m.missing_reports if m.missing_reports is defined else 0 }}</td>
+        <td class="num mono">{{ m.isolated_days }}</td>
+        <td class="num mono">{{ m.missing_days }}</td>
+        <td class="cell-note">{% if m.missing_dates %}{{ m.missing_dates|join('、') }}{% else %}—{% endif %}</td>
+        <td><span class="badge badge-{{ 'ok' if m.state == 'complete' else 'warn' }}">{{ '完整' if m.state == 'complete' else '不完整' }}</span></td>
+      </tr>{% endfor %}</tbody>
+  </table></div>
+</section>
+
+<section class="panel">
+  <div class="panel-head"><h2 class="panel-title">同版异值隔离（不猜哪条为准）</h2>
+    <span class="panel-sub mono">{{ view.conflicts|length }} 组</span></div>
+  <div class="table-wrap"><table class="table table-dense">
+    <thead><tr><th>站号</th><th>日期</th><th class="num">版本</th><th>冲突原值（行号）</th></tr></thead>
+    <tbody>{% for c in view.conflicts %}
+      <tr><td class="mono">{{ c.station }}</td><td class="mono">{{ c.date }}</td>
+        <td class="num mono">{{ c.version }}</td>
+        <td class="cell-note">{% for r in c.rows %}{{ r.value_text }}（L{{ r.lineno }}）{% if not loop.last %} vs {% endif %}{% endfor %}</td>
+      </tr>{% else %}
+      <tr><td colspan="4" class="cell-note">无同版异值。</td></tr>{% endfor %}</tbody>
+  </table></div>
+</section>
+{% else %}
+<section class="empty"><p class="empty-line">还没有已发布版本：先导入日值并发布第一版。</p></section>
+{% endif %}
+{% endblock %}
+{% block scripts %}
+<script src="/static/corrections.js" type="module"></script>
+{% endblock %}

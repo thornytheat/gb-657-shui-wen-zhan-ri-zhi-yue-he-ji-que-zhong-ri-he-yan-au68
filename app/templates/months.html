@@ -2,7 +2,10 @@
 {% block body %}
 <section class="page-head">
   <div><h1 class="page-title">月合计</h1><p class="page-meta mono">2024-02 · 当地自然日</p></div>
-  <div class="actions"><a class="btn btn-primary" href="/api/export/monthly.csv">导出月报</a></div>
+  <div class="actions">
+    <a class="btn btn-primary" href="/corrections">导入日值 / 更正发布</a>
+    <a class="btn btn-ghost" href="/api/export/monthly.csv">导出月报</a>
+  </div>
 </section>
 
 {% if not batch %}

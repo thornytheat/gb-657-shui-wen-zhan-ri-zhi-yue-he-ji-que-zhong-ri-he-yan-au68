@@ -1,8 +1,8 @@
 # 深度登记 hydrocalendar（水文站日值月合计缺重日核验）
 
-- 规模：中型（7 个功能模块 / 6 个应用页 / 77 条测试）
-- 核心规则：站点日值按版本选择而非后写覆盖，零雨与缺测分开；月合计用 Decimal，并以当地自然日日历核对完整度。
-- 使用者与工作流：流域数据员复核多站逐日雨量、缺重日、月合计与相邻站异常。
+- 规模：中型（8 个功能模块 / 7 个应用页 / 129 条测试）
+- 核心规则：站点日值按版本选择而非后写覆盖，零雨与缺测分开；月合计用 Decimal，并以当地自然日日历核对完整度；更正发布以不可变世代冻结月报，切换只动指针，旧报原样复现。
+- 使用者与工作流：流域数据员复核多站逐日雨量、缺重日、月合计与相邻站异常；补传高版本日值后在「月量更正」页发布新版本并对看前后月量。
 
 ## 功能模块
 
@@ -15,6 +15,7 @@
 | M5 月量计算 | 按版本选择日值并计算月合计与缺日 | POST /api/hydro/monthly、页面 /months | `app/modules/m5_months/hydro.py` `app/modules/m5_months/allocate.py` `app/modules/m5_months/weights.py` | `tests/test_m5_months.py` `tests/test_hydro_rules.py` |
 | M6 批次与对账 | 跑全流程、查批次历史、看四账、失败重试 | POST /api/runs、GET /api/batches、GET /api/reconcile、页面 /batches | `app/modules/m6_batches/service.py` `app/modules/m6_batches/compare.py` `app/modules/m6_batches/history.py` `app/modules/m6_batches/resume.py` | `tests/test_m6_batches.py` |
 | M7 导出 | 导出单一月报与运行证据 | GET /api/export/monthly.csv、页面 /report | `app/modules/m7_export/evidence.py` `app/modules/m7_export/csv_out.py` `app/modules/m7_export/manifest_out.py` | `tests/test_m7_export.py` |
+| M8 日值更正发布 | 导入真实日值、发布更正、版本对看与版本跟随下载 | POST /api/corrections/stage、POST /api/corrections/{run}/publish、页面 /corrections | `app/modules/m8_correction/service.py` `app/modules/m8_correction/engine.py` `app/modules/m8_correction/parser.py` `app/modules/m8_correction/store.py` | `tests/test_m8_correction.py` `tests/test_m8_engine.py` `tests/test_m8_parser.py` |
 
 端到端：`tests/test_e2e.py`（脏样例 → 六页 200 → 四账 → 导出，含 4xx 失败输入与幂等重跑）。
 不变量：`tests/test_invariants.py`（区间账 = 月度账、幂等重跑行数不变、月桶划分、账单闭合、读数分区）。
@@ -38,6 +39,12 @@
 | TRAP-18 | 0 字节文件、只有表头、数据行全是空行 | 三种都返回「成功导入 0 行」，或直接除零 | 三个文件级原因码分开返回，不落半批数据 | `app/modules/m1_ingest/service.py` | `tests/test_m1_ingest.py::test_empty_states_return_distinct_codes` |
 | TRAP-23 | 区间止点与下一段起点都算一次 | 相邻区间重复计入一天，月度用量偏高 | 区间与月桶都声明左闭右开 `[起, 止)`，相邻段首尾相接 | `app/modules/m5_months/weights.py`、`app/modules/m4_intervals/restore.py` | `tests/test_m5_months.py::test_month_slices_are_half_open`、`tests/test_m4_intervals.py::test_intervals_are_half_open_and_contiguous` |
 | TRAP-24 | 各月/各分量各自四舍五入后合计不等 | 分完差 0.001~0.02，账永远差几分 | 最大余额法分月；分量残差并入最大分量；账单先合计再舍入，分项补差 | `app/modules/m5_months/weights.py`、`app/modules/m5_months/tou.py` | `tests/test_m5_months.py::test_largest_remainder_keeps_total_exact`、`tests/test_m5_months.py::test_tou_components_closed_to_total` |
+| TRAP-30 | 补传高版本日值后直接覆盖旧数据 | 已发月报及其采信日值被改写，旧报无法复现 | 原始日值只追加，每次发布冻结不可变世代，切换只改 `current_gen` 指针，旧世代永久可读 | `app/modules/m8_correction/store.py`、`app/modules/m8_correction/service.py` | `tests/test_m8_correction.py::test_correction_updates_current_but_old_report_reproduces` |
+| TRAP-31 | 零雨 `0` 与缺测混为一谈 | 缺测被当 0 计入，月量虚低且无法区分 | 三态解析：零雨 `measured/0`、缺测 `missing/NULL`，缺测不贡献合计，分列计数 | `app/modules/m8_correction/parser.py`、`app/modules/m8_correction/engine.py` | `tests/test_m8_engine.py::test_zero_rain_is_measurement_not_missing`、`tests/test_m8_parser.py::test_missing_tokens_become_missing_kind` |
+| TRAP-32 | 同一天同版本两条不同值，后写覆盖 | 前值消失且不留痕，月量取决于导入顺序 | 同版异值整组隔离（`Q_CORR_VERSION_CONFLICT`），组内行全部留存，该天计隔离日不计合计 | `app/modules/m8_correction/engine.py` | `tests/test_m8_engine.py::test_same_version_different_values_isolates_whole_group` |
+| TRAP-33 | 两个更正并发发布 | 产生两个互相覆盖的世代，月报口径不确定 | `BEGIN IMMEDIATE` + `publish_lock`，第二个请求 409 `E_CORR_BUSY`；过期基准 409 `E_CORR_STALE` | `app/modules/m8_correction/service.py` | `tests/test_m8_correction.py::test_concurrent_publish_is_rejected_with_busy`、`test_stale_correction_rejected_but_old_version_stays_readable` |
+| TRAP-34 | 发布进程中断后重试 | 半成品世代残留，重试重复生成月报 | 阶段写 `checkpoints_json`、半成品号写 `pending_gen`，重入清半成品复用同一 `gen_id` 重算，原始行不重插 | `app/modules/m8_correction/service.py` | `tests/test_m8_correction.py::test_resume_clears_half_generation_and_does_not_duplicate` |
+| TRAP-35 | 闰月（29 天）缺日按 28 天核对 | 缺日数错 1，完整度误判 | 月天数取 `calendar.monthrange`，闰月自动 29，并逐日列出缺日明细 | `app/modules/m8_correction/engine.py` | `tests/test_m8_engine.py::test_leap_february_has_29_days_and_lists_missing_dates` |
 
 ## 对账规则
 

@@ -82,3 +82,45 @@
 标记 `K_*`：`K_ROLLOVER`、`K_REPLACEMENT_FIRST`、`K_ESTIMATE_SKIPPED`、`K_CHARSET_FALLBACK`、`K_BOM_STRIPPED`、`K_SEGMENT_SPLIT`、`K_TRUNCATED_TAIL`、`K_TOU_ADJUSTED`、`K_BILL_ROUNDED`、`K_UNIT_ASSUMED`、`K_UNIT_CONVERTED`、`K_DUPLICATE_IDENTICAL`。
 
 唯一来源：`app/reasons.py`；页面与导出的原因文案都从它取。
+
+## 10 日值更正发布（M8，独立 `corr_*` 表）
+
+### 10.1 更正文件列契约
+
+| 规范列名 | 可接受别名 | 类型 | 可空 | 说明 |
+|---|---|---|---|---|
+| `station` | 站号 / 站点 / 水文站 / station_id / 测站 | 字符串 | 否 | 按字符串保形 |
+| `date` | 日期 / 观测日期 / day | 日期 | 否 | 接受 `YYYY-MM-DD`、`YYYY/MM/DD`、`YYYYMMDD` |
+| `rainfall_mm` | rainfall / 雨量 / 日雨量 / 降雨量 / 降水量 | 十进制或哨兵 | 否 | `0` 是零雨实测；哨兵（`缺测/-/N/A/空串…`）是缺测，二者分开 |
+| `version` | 版本 / 数据版本 / ver / 版本号 | 整数 ≥ 1 | 是 | 缺省按 1；无法解析整行进隔离 |
+
+三态：零雨（`kind=measured, value=0`，标 `K_CORR_ZERO_RAIN`）、缺测（`kind=missing, value=NULL`，标 `Q_CORR_MISSING`）、正常实测。缺测不按 0 计入月合计。
+
+### 10.2 版本裁决（按站点 + 日期）
+
+- 业务键 `(station, date)`；组内取 `version` 最大者，与导入先后无关（高版本裁决，非后写覆盖）。
+- 最高版本下出现异值（含一实测一缺测）→ 整组进 `corr_day_conflicts`（`Q_CORR_VERSION_CONFLICT`），组内行全部落 `isolated`，该天不计合计、不计采信、计为隔离日。
+- 最高版本多行同值 → 折叠为一条；其余低版本行留 `corr_daily_values` 作重复证据，不删除。
+- 原始日值只追加（`corr_daily_values`），更正理由必填并随 `corr_runs.reason` 与世代 `corr_publishes.reason` 留痕。
+
+### 10.3 月量与日历完整度
+
+- 月合计 `Decimal` 求和后量化到 `0.1 mm`；缺测日不贡献数值，零雨贡献 0。
+- 自然日按 `calendar.monthrange` 计算，闰月自动 29 天；`缺日 = 自然日 − 采信日 − 隔离日`，并在 `missing_dates` 显式列出每个缺日（闰月缺日标 `K_CORR_LEAP_MISSING` 语义）。
+- 月状态：无缺日且无隔离日为 `complete`，否则 `partial`。
+
+### 10.4 世代、并发与续跑
+
+- 每次发布生成不可变世代 `corr_publishes`（`gen-*`），月量冻结在 `corr_monthly`；切换只改 `corr_state.current_gen` 指针，旧世代永不改写，旧报可原样复现。
+- 并发：发布在 `BEGIN IMMEDIATE` 事务内复查 `corr_state.publish_lock`，第二个请求 409 `E_CORR_BUSY`。
+- 过期：暂存记录 `base_gen`，发布时与当前世代比对，不一致即 409 `E_CORR_STALE`，旧版月报保持可读；可 `rebase` 改挂当前世代后再发布。
+- 续跑：阶段进度写 `corr_runs.checkpoints_json`，半成品世代号写 `pending_gen`；重入先删半成品（绝不删当前世代）再重算，复用同一 `gen_id`，重试不重复生成月报。崩溃残留锁由服务首次构造时 `reset_stale_lock` 清理。
+- 幂等：同一文件摘要（`source_digest`）的任务不重复建单、不重复插行；已 `done` 任务重复发布 409 `E_CORR_RUN_DONE`。
+
+### 10.5 四账与导出
+
+- 四账恒等：`输入 = 采纳 + 重复 + 隔离`（`GET /api/corrections/reconcile`，`delta=0` 才平衡）。
+- 月报 `GET /api/corrections/monthly.csv?gen_id=...` 跟随所选世代；不带 `gen_id` 取当前世代。
+- 前后版本对看 `GET /api/corrections/compare?left=&right=`，逐站逐月给出前后值与变化量。
+
+M8 新增原因码：`E_CORR_EMPTY`、`E_CORR_HEADER`、`E_CORR_RUN_NOT_FOUND`、`E_CORR_RUN_NOT_STAGED`、`E_CORR_RUN_DONE`、`E_CORR_STALE`、`E_CORR_BUSY`、`E_CORR_VERSION`、`Q_CORR_BAD_DATE`、`Q_CORR_BAD_VALUE`、`Q_CORR_NEGATIVE`、`Q_CORR_MISSING`、`Q_CORR_VERSION_CONFLICT`、`K_CORR_ZERO_RAIN`、`K_CORR_HIGHER_VERSION`、`K_CORR_LOWER_DUPLICATE`、`K_CORR_LEAP_MISSING`、`K_CORR_RESUMED`。

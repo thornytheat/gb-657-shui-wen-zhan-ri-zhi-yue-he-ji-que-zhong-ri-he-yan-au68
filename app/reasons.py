@@ -42,6 +42,25 @@ REASONS: dict[str, dict[str, str]] = {
     "K_UNIT_ASSUMED": {"label": "单位按契约补齐", "level": "info"},
     "K_UNIT_CONVERTED": {"label": "单位已折算", "level": "info"},
     "K_DUPLICATE_IDENTICAL": {"label": "重复行已合并", "level": "info"},
+    # ---- M8 日值更正发布 ----
+    "E_CORR_EMPTY": {"label": "更正文件为空", "level": "error"},
+    "E_CORR_HEADER": {"label": "更正表头缺列", "level": "error"},
+    "E_CORR_RUN_NOT_FOUND": {"label": "更正任务不存在", "level": "error"},
+    "E_CORR_RUN_NOT_STAGED": {"label": "更正任务不是待发布状态", "level": "error"},
+    "E_CORR_RUN_DONE": {"label": "更正任务已发布，禁止重复发布", "level": "error"},
+    "E_CORR_STALE": {"label": "过期更正：依据版本已不是当前版", "level": "error"},
+    "E_CORR_BUSY": {"label": "另一更正正在发布，请稍后再试", "level": "error"},
+    "E_CORR_VERSION": {"label": "版本号无法解析", "level": "error"},
+    "Q_CORR_BAD_DATE": {"label": "日期无法解析", "level": "error"},
+    "Q_CORR_BAD_VALUE": {"label": "雨量值无法解析", "level": "error"},
+    "Q_CORR_NEGATIVE": {"label": "雨量为负数", "level": "error"},
+    "Q_CORR_MISSING": {"label": "缺测（不计零雨）", "level": "warn"},
+    "Q_CORR_VERSION_CONFLICT": {"label": "同版异值，整组隔离", "level": "error"},
+    "K_CORR_ZERO_RAIN": {"label": "零雨按实测保留", "level": "info"},
+    "K_CORR_HIGHER_VERSION": {"label": "高版本裁决采纳", "level": "info"},
+    "K_CORR_LOWER_DUPLICATE": {"label": "低版本重复，留存不采纳", "level": "info"},
+    "K_CORR_LEAP_MISSING": {"label": "闰月缺日已明确标出", "level": "warn"},
+    "K_CORR_RESUMED": {"label": "中断后续跑完成", "level": "info"},
 }
 
 

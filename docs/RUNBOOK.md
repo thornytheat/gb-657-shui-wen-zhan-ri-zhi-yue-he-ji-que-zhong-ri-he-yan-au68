@@ -39,6 +39,36 @@ curl -sS -o /tmp/monthly.csv http://localhost:18216/api/export/monthly.csv
 - **重跑测试**：`docker compose exec -T app python -m pytest -q`。
 - **清库**：`docker compose down -v` 删除命名卷；下次启动自动建表。
 
+## 3A 月量更正发布（补传高版本日值）
+
+1. 打开「月量更正」页（`/corrections`），填**更正理由**（必填，随原始行与世代留痕）。
+2. 上传更正 CSV（列：`station,date,rainfall_mm,version`；样例 `sample_data/correction_base.csv`、`correction_backfill.csv`），或在文本框粘贴 JSON 记录，点「导入暂存」。零雨写 `0`，缺测写 `缺测`/`-`，二者分开。
+3. 在任务表点「发布」：系统按 `(站点, 日期)` 裁决版本，冻结一个不可变世代（`gen-*`）并把当前版本指针切到新版。
+4. 用顶部版本 chip 回看任意旧版，页面给出前后版本逐站逐月对看与变化量；「下载所选版本月报」跟随当前选中的 `gen_id`。
+5. 四账 KPI 与 `GET /api/corrections/reconcile` 同源：输入 = 采纳 + 重复 + 隔离，差额为 0 才平衡。
+
+命令行：
+
+```bash
+# 暂存（multipart 文件上传）
+curl -sS -X POST http://localhost:18216/api/corrections/stage \
+  -F 'reason=水文站补传高版本' -F 'file=@sample_data/correction_backfill.csv'
+# 发布
+curl -sS -X POST http://localhost:18216/api/corrections/{run_id}/publish
+# 版本对看、下载指定版本月报
+curl -sS 'http://localhost:18216/api/corrections/compare?left=gen-aaa&right=gen-bbb'
+curl -sS -o /tmp/corr.csv 'http://localhost:18216/api/corrections/monthly.csv?gen_id=gen-aaa'
+```
+
+| 现象 | 原因 | 处理 |
+|---|---|---|
+| 409 `E_CORR_STALE` | 暂存后基准版本已被别的更正推进 | 点「重新定基」或 POST `/api/corrections/{run}/rebase` 后再发布 |
+| 409 `E_CORR_BUSY` | 另一更正正在发布 | 稍后重试；进程崩溃残留锁会在服务首次构造时自动清理 |
+| 409 `E_CORR_RUN_DONE` | 任务已发布，禁止重复出月报 | 改走新版本导入；旧版在版本 chip 中回看 |
+| 422 `E_CORR_EMPTY` / `E_CORR_HEADER` | 空文件 / 缺 `station,date,rainfall_mm` 列 | 按更正列契约补齐 |
+| 同版异值进隔离区 | 同一天同版本两条值不一致 | 在「同版异值隔离」表看原值与行号，核对后用更高版本重导 |
+| 发布中断 | 进程在冻结/切换阶段退出 | 直接对同一任务再点「发布」，清半成品后续跑，不重复生成月报 |
+
 ## 4 失败排查
 
 | 现象 | 原因 | 处理 |
